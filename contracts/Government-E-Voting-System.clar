@@ -270,3 +270,241 @@
         (ok true)
     )
 )
+
+(define-constant err-invalid-delegation (err u109))
+(define-constant err-delegation-not-found (err u110))
+(define-constant err-self-delegation (err u111))
+
+(define-map VoterDelegations
+    principal
+    {
+        delegate: principal,
+        delegation-block: uint,
+        active: bool,
+    }
+)
+
+(define-map DelegateVotingPower
+    principal
+    uint
+)
+
+(define-read-only (get-delegation (voter principal))
+    (map-get? VoterDelegations voter)
+)
+
+(define-read-only (get-voting-power (delegate principal))
+    (default-to u1 (map-get? DelegateVotingPower delegate))
+)
+
+(define-public (delegate-vote (delegate principal))
+    (let (
+            (voter (get-voter tx-sender))
+            (delegate-info (get-voter delegate))
+            (current-power (get-voting-power delegate))
+        )
+        (asserts! (get registered voter) err-not-registered)
+        (asserts! (get registered delegate-info) err-not-registered)
+        (asserts! (not (is-eq tx-sender delegate)) err-self-delegation)
+        (asserts! (is-none (map-get? VoterDelegations tx-sender))
+            err-invalid-delegation
+        )
+        (map-set VoterDelegations tx-sender {
+            delegate: delegate,
+            delegation-block: stacks-block-height,
+            active: true,
+        })
+        (map-set DelegateVotingPower delegate (+ current-power u1))
+        (ok true)
+    )
+)
+
+(define-public (revoke-delegation)
+    (let (
+            (delegation (unwrap! (map-get? VoterDelegations tx-sender)
+                err-delegation-not-found
+            ))
+            (delegate (get delegate delegation))
+            (current-power (get-voting-power delegate))
+        )
+        (map-delete VoterDelegations tx-sender)
+        (map-set DelegateVotingPower delegate (- current-power u1))
+        (ok true)
+    )
+)
+
+(define-public (vote-as-delegate
+        (proposal-id uint)
+        (vote-value (string-ascii 10))
+    )
+    (let (
+            (voter (get-voter tx-sender))
+            (proposal (unwrap! (map-get? Proposals proposal-id) err-proposal-not-found))
+            (voting-power (get-voting-power tx-sender))
+        )
+        (asserts! (get registered voter) err-not-registered)
+        (asserts! (get is-active proposal) err-voting-closed)
+        (asserts! (<= stacks-block-height (get end-block proposal))
+            err-voting-closed
+        )
+        (asserts!
+            (or
+                (is-eq vote-value "yes")
+                (is-eq vote-value "no")
+                (is-eq vote-value "abstain")
+            )
+            err-invalid-vote
+        )
+        (asserts!
+            (is-none (map-get? VoteRegistry {
+                proposal-id: proposal-id,
+                voter: tx-sender,
+            }))
+            err-already-voted
+        )
+        (map-set VoteRegistry {
+            proposal-id: proposal-id,
+            voter: tx-sender,
+        } {
+            vote-value: vote-value,
+            stacks-block-height: stacks-block-height,
+        })
+        (map-set Proposals proposal-id
+            (merge proposal {
+                yes-votes: (if (is-eq vote-value "yes")
+                    (+ (get yes-votes proposal) voting-power)
+                    (get yes-votes proposal)
+                ),
+                no-votes: (if (is-eq vote-value "no")
+                    (+ (get no-votes proposal) voting-power)
+                    (get no-votes proposal)
+                ),
+                abstain-votes: (if (is-eq vote-value "abstain")
+                    (+ (get abstain-votes proposal) voting-power)
+                    (get abstain-votes proposal)
+                ),
+            })
+        )
+        (ok true)
+    )
+)
+(define-constant err-invalid-category (err u112))
+(define-constant err-category-exists (err u113))
+
+(define-map ProposalCategories
+    (string-ascii 30)
+    {
+        name: (string-ascii 30),
+        description: (string-ascii 200),
+        active: bool,
+        proposal-count: uint,
+    }
+)
+
+(define-map ProposalCategoryMapping
+    uint
+    (string-ascii 30)
+)
+
+(define-map CategoryProposals
+    {
+        category: (string-ascii 30),
+        proposal-id: uint,
+    }
+    bool
+)
+
+(define-read-only (get-category (category-id (string-ascii 30)))
+    (map-get? ProposalCategories category-id)
+)
+
+(define-read-only (get-proposal-category (proposal-id uint))
+    (map-get? ProposalCategoryMapping proposal-id)
+)
+
+(define-read-only (is-proposal-in-category
+        (category-id (string-ascii 30))
+        (proposal-id uint)
+    )
+    (default-to false
+        (map-get? CategoryProposals {
+            category: category-id,
+            proposal-id: proposal-id,
+        })
+    )
+)
+
+(define-public (create-category
+        (category-id (string-ascii 30))
+        (name (string-ascii 30))
+        (description (string-ascii 200))
+    )
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (asserts! (is-none (map-get? ProposalCategories category-id))
+            err-category-exists
+        )
+        (map-set ProposalCategories category-id {
+            name: name,
+            description: description,
+            active: true,
+            proposal-count: u0,
+        })
+        (ok true)
+    )
+)
+
+(define-public (create-categorized-proposal
+        (title (string-ascii 100))
+        (description (string-ascii 500))
+        (voting-period uint)
+        (category-id (string-ascii 30))
+    )
+    (let (
+            (voter (get-voter tx-sender))
+            (proposal-id (var-get proposal-count))
+            (start-block stacks-block-height)
+            (end-block (+ stacks-block-height voting-period))
+            (category (unwrap! (map-get? ProposalCategories category-id)
+                err-invalid-category
+            ))
+        )
+        (asserts! (get registered voter) err-not-registered)
+        (asserts! (> voting-period u0) err-invalid-period)
+        (asserts! (get active category) err-invalid-category)
+        (map-set Proposals proposal-id {
+            title: title,
+            description: description,
+            creator: tx-sender,
+            yes-votes: u0,
+            no-votes: u0,
+            abstain-votes: u0,
+            start-block: start-block,
+            end-block: end-block,
+            is-active: true,
+            result-finalized: false,
+        })
+        (map-set ProposalCategoryMapping proposal-id category-id)
+        (map-set CategoryProposals {
+            category: category-id,
+            proposal-id: proposal-id,
+        }
+            true
+        )
+        (map-set ProposalCategories category-id
+            (merge category { proposal-count: (+ (get proposal-count category) u1) })
+        )
+        (var-set proposal-count (+ proposal-id u1))
+        (ok proposal-id)
+    )
+)
+
+(define-public (deactivate-category (category-id (string-ascii 30)))
+    (let ((category (unwrap! (map-get? ProposalCategories category-id) err-invalid-category)))
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (map-set ProposalCategories category-id
+            (merge category { active: false })
+        )
+        (ok true)
+    )
+)
