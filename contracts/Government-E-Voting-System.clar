@@ -11,6 +11,7 @@
 
 (define-data-var proposal-count uint u0)
 (define-data-var admin-address principal contract-owner)
+(define-data-var minimum-vote-threshold uint u10)
 
 (define-map Voters
     principal
@@ -99,6 +100,19 @@
 
 (define-read-only (get-proposal-count)
     (var-get proposal-count)
+)
+
+(define-read-only (get-minimum-vote-threshold)
+    (var-get minimum-vote-threshold)
+)
+
+(define-read-only (get-total-votes (proposal-id uint))
+    (match (map-get? Proposals proposal-id)
+        proposal (ok (+ (+ (get yes-votes proposal) (get no-votes proposal))
+            (get abstain-votes proposal)
+        ))
+        err-proposal-not-found
+    )
 )
 
 (define-public (register-voter (district-id (string-ascii 50)))
@@ -216,7 +230,13 @@
 )
 
 (define-public (close-proposal (proposal-id uint))
-    (let ((proposal (unwrap! (map-get? Proposals proposal-id) err-proposal-not-found)))
+    (let (
+            (proposal (unwrap! (map-get? Proposals proposal-id) err-proposal-not-found))
+            (total-votes (+ (+ (get yes-votes proposal) (get no-votes proposal))
+                (get abstain-votes proposal)
+            ))
+            (min-threshold (var-get minimum-vote-threshold))
+        )
         (asserts!
             (or
                 (>= stacks-block-height (get end-block proposal))
@@ -224,6 +244,7 @@
             )
             err-not-authorized
         )
+        (asserts! (>= total-votes min-threshold) err-insufficient-votes)
         (map-set Proposals proposal-id
             (merge proposal {
                 is-active: false,
@@ -390,6 +411,7 @@
 )
 (define-constant err-invalid-category (err u112))
 (define-constant err-category-exists (err u113))
+(define-constant err-insufficient-votes (err u114))
 
 (define-map ProposalCategories
     (string-ascii 30)
@@ -505,6 +527,14 @@
         (map-set ProposalCategories category-id
             (merge category { active: false })
         )
+        (ok true)
+    )
+)
+
+(define-public (set-minimum-vote-threshold (new-threshold uint))
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (var-set minimum-vote-threshold new-threshold)
         (ok true)
     )
 )
