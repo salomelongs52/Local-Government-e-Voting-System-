@@ -538,3 +538,187 @@
         (ok true)
     )
 )
+
+(define-constant err-amendment-exists (err u115))
+(define-constant err-amendment-not-found (err u116))
+(define-constant err-amendment-period-expired (err u117))
+
+(define-data-var amendment-count uint u0)
+
+(define-map ProposalAmendments
+    uint
+    {
+        proposal-id: uint,
+        title: (string-ascii 100),
+        description: (string-ascii 500),
+        creator: principal,
+        yes-votes: uint,
+        no-votes: uint,
+        submission-block: uint,
+        voting-end-block: uint,
+        is-active: bool,
+        applied: bool,
+    }
+)
+
+(define-map AmendmentVotes
+    {
+        amendment-id: uint,
+        voter: principal,
+    }
+    {
+        vote-value: (string-ascii 10),
+        stacks-block-height: uint,
+    }
+)
+
+(define-read-only (get-amendment (amendment-id uint))
+    (map-get? ProposalAmendments amendment-id)
+)
+
+(define-read-only (get-amendment-vote
+        (amendment-id uint)
+        (voter principal)
+    )
+    (map-get? AmendmentVotes {
+        amendment-id: amendment-id,
+        voter: voter,
+    })
+)
+
+(define-read-only (get-amendment-count)
+    (var-get amendment-count)
+)
+
+(define-public (submit-amendment
+        (proposal-id uint)
+        (title (string-ascii 100))
+        (description (string-ascii 500))
+        (voting-period uint)
+    )
+    (let (
+            (voter (get-voter tx-sender))
+            (proposal (unwrap! (map-get? Proposals proposal-id) err-proposal-not-found))
+            (amendment-id (var-get amendment-count))
+            (submission-block stacks-block-height)
+            (voting-end-block (+ stacks-block-height voting-period))
+        )
+        (asserts! (get registered voter) err-not-registered)
+        (asserts! (get is-active proposal) err-voting-closed)
+        (asserts! (> voting-period u0) err-invalid-period)
+        (asserts! (<= stacks-block-height (get end-block proposal))
+            err-voting-closed
+        )
+        (map-set ProposalAmendments amendment-id {
+            proposal-id: proposal-id,
+            title: title,
+            description: description,
+            creator: tx-sender,
+            yes-votes: u0,
+            no-votes: u0,
+            submission-block: submission-block,
+            voting-end-block: voting-end-block,
+            is-active: true,
+            applied: false,
+        })
+        (var-set amendment-count (+ amendment-id u1))
+        (ok amendment-id)
+    )
+)
+
+(define-public (vote-on-amendment
+        (amendment-id uint)
+        (vote-value (string-ascii 10))
+    )
+    (let (
+            (voter (get-voter tx-sender))
+            (amendment (unwrap! (map-get? ProposalAmendments amendment-id)
+                err-amendment-not-found
+            ))
+        )
+        (asserts! (get registered voter) err-not-registered)
+        (asserts! (get is-active amendment) err-voting-closed)
+        (asserts! (<= stacks-block-height (get voting-end-block amendment))
+            err-amendment-period-expired
+        )
+        (asserts!
+            (or
+                (is-eq vote-value "yes")
+                (is-eq vote-value "no")
+            )
+            err-invalid-vote
+        )
+        (asserts!
+            (is-none (map-get? AmendmentVotes {
+                amendment-id: amendment-id,
+                voter: tx-sender,
+            }))
+            err-already-voted
+        )
+        (map-set AmendmentVotes {
+            amendment-id: amendment-id,
+            voter: tx-sender,
+        } {
+            vote-value: vote-value,
+            stacks-block-height: stacks-block-height,
+        })
+        (map-set ProposalAmendments amendment-id
+            (merge amendment {
+                yes-votes: (if (is-eq vote-value "yes")
+                    (+ (get yes-votes amendment) u1)
+                    (get yes-votes amendment)
+                ),
+                no-votes: (if (is-eq vote-value "no")
+                    (+ (get no-votes amendment) u1)
+                    (get no-votes amendment)
+                ),
+            })
+        )
+        (ok true)
+    )
+)
+
+(define-public (apply-amendment
+        (amendment-id uint)
+        (new-title (string-ascii 100))
+        (new-description (string-ascii 500))
+    )
+    (let (
+            (amendment (unwrap! (map-get? ProposalAmendments amendment-id)
+                err-amendment-not-found
+            ))
+            (proposal-id (get proposal-id amendment))
+            (proposal (unwrap! (map-get? Proposals proposal-id) err-proposal-not-found))
+            (total-amendment-votes (+ (get yes-votes amendment) (get no-votes amendment)))
+            (min-threshold (var-get minimum-vote-threshold))
+        )
+        (asserts!
+            (or
+                (is-eq tx-sender contract-owner)
+                (is-eq tx-sender (get creator amendment))
+            )
+            err-not-authorized
+        )
+        (asserts! (>= stacks-block-height (get voting-end-block amendment))
+            err-amendment-period-expired
+        )
+        (asserts! (> (get yes-votes amendment) (get no-votes amendment))
+            err-insufficient-votes
+        )
+        (asserts! (>= total-amendment-votes min-threshold) err-insufficient-votes)
+        (asserts! (get is-active proposal) err-voting-closed)
+        (map-set Proposals proposal-id
+            (merge proposal {
+                title: new-title,
+                description: new-description,
+            })
+        )
+        (map-set ProposalAmendments amendment-id
+            (merge amendment {
+                is-active: false,
+                applied: true,
+            })
+        )
+        (ok true)
+    )
+)
