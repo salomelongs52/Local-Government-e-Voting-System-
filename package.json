@@ -1,0 +1,41 @@
+{
+  "name": "government-e-voting-system",
+  "version": "1.0.0",
+  "description": "Local Government e-Voting System with Campaign Finance Transparency",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest --coverage",
+    "lint": "eslint . --ext .ts,.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/salomelongs52/Local-Government-e-Voting-System-.git"
+  },
+  "keywords": [
+    "blockchain",
+    "voting",
+    "stacks",
+    "clarinet",
+    "campaign-finance",
+    "government",
+    "transparency"
+  ],
+  "author": "salomelongs52",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/salomelongs52/Local-Government-e-Voting-System-/issues"
+  },
+  "homepage": "https://github.com/salomelongs52/Local-Government-e-Voting-System-#readme",
+  "devDependencies": {
+    "@hirosystems/clarinet-sdk": "^2.16.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
