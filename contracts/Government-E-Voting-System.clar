@@ -453,11 +453,13 @@
         )
         (asserts! (get active campaign) err-campaign-inactive)
         (asserts! (> amount u0) err-invalid-amount)
-        (asserts! (<= new-contributor-total max-contribution) err-contribution-limit-exceeded)
+        (asserts! (<= new-contributor-total max-contribution)
+            err-contribution-limit-exceeded
+        )
         (asserts! (<= stacks-block-height (get reporting-deadline campaign))
             err-reporting-period-closed
         )
-        
+
         (map-set Contributions contribution-id {
             campaign-id: campaign-id,
             contributor: tx-sender,
@@ -466,18 +468,18 @@
             verified: false,
             contribution-type: contribution-type,
         })
-        
+
         (map-set ContributorTotals {
             campaign-id: campaign-id,
             contributor: tx-sender,
-        } new-contributor-total)
-        
-        (map-set Campaigns campaign-id
-            (merge campaign {
-                total-contributions: (+ (get total-contributions campaign) amount),
-            })
+        }
+            new-contributor-total
         )
-        
+
+        (map-set Campaigns campaign-id
+            (merge campaign { total-contributions: (+ (get total-contributions campaign) amount) })
+        )
+
         (var-set contribution-count (+ contribution-id u1))
         (ok contribution-id)
     )
@@ -493,13 +495,15 @@
     (let (
             (campaign (unwrap! (map-get? Campaigns campaign-id) err-campaign-not-found))
             (expenditure-id (var-get expenditure-count))
-            (current-balance (- (get total-contributions campaign) (get total-expenditures campaign)))
+            (current-balance (- (get total-contributions campaign)
+                (get total-expenditures campaign)
+            ))
         )
         (asserts! (is-eq tx-sender (get candidate campaign)) err-not-authorized)
         (asserts! (get active campaign) err-campaign-inactive)
         (asserts! (> amount u0) err-invalid-amount)
         (asserts! (<= amount current-balance) err-expenditure-exceeds-funds)
-        
+
         (map-set Expenditures expenditure-id {
             campaign-id: campaign-id,
             amount: amount,
@@ -509,24 +513,18 @@
             category: category,
             approved: false,
         })
-        
+
         (map-set Campaigns campaign-id
-            (merge campaign {
-                total-expenditures: (+ (get total-expenditures campaign) amount),
-            })
+            (merge campaign { total-expenditures: (+ (get total-expenditures campaign) amount) })
         )
-        
+
         (var-set expenditure-count (+ expenditure-id u1))
         (ok expenditure-id)
     )
 )
 
 (define-public (verify-contribution (contribution-id uint))
-    (let (
-            (contribution (unwrap! (map-get? Contributions contribution-id)
-                err-campaign-not-found
-            ))
-        )
+    (let ((contribution (unwrap! (map-get? Contributions contribution-id) err-campaign-not-found)))
         (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
         (map-set Contributions contribution-id
             (merge contribution { verified: true })
@@ -536,11 +534,7 @@
 )
 
 (define-public (approve-expenditure (expenditure-id uint))
-    (let (
-            (expenditure (unwrap! (map-get? Expenditures expenditure-id)
-                err-campaign-not-found
-            ))
-        )
+    (let ((expenditure (unwrap! (map-get? Expenditures expenditure-id) err-campaign-not-found)))
         (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
         (map-set Expenditures expenditure-id
             (merge expenditure { approved: true })
@@ -550,9 +544,7 @@
 )
 
 (define-public (deactivate-campaign (campaign-id uint))
-    (let (
-            (campaign (unwrap! (map-get? Campaigns campaign-id) err-campaign-not-found))
-        )
+    (let ((campaign (unwrap! (map-get? Campaigns campaign-id) err-campaign-not-found)))
         (asserts!
             (or
                 (is-eq tx-sender contract-owner)
@@ -560,9 +552,7 @@
             )
             err-not-authorized
         )
-        (map-set Campaigns campaign-id
-            (merge campaign { active: false })
-        )
+        (map-set Campaigns campaign-id (merge campaign { active: false }))
         (ok true)
     )
 )
@@ -598,6 +588,140 @@
     (begin
         (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
         (var-set minimum-vote-threshold new-threshold)
+        (ok true)
+    )
+)
+
+(define-constant err-auditor-not-found (err u118))
+(define-constant err-auditor-exists (err u119))
+(define-constant err-auditor-inactive (err u120))
+(define-constant err-report-not-found (err u121))
+(define-constant err-report-exists (err u122))
+(define-constant err-invalid-severity (err u123))
+(define-constant err-invalid-target (err u124))
+
+(define-data-var auditor-count uint u0)
+(define-data-var audit-report-count uint u0)
+
+(define-map Auditors
+    principal
+    {
+        auditor-name: (string-ascii 100),
+        registration-block: uint,
+        active: bool,
+        completed-audits: uint,
+    }
+)
+
+(define-map AuditReports
+    uint
+    {
+        auditor: principal,
+        target-type: (string-ascii 20),
+        target-id: uint,
+        report-hash: (string-ascii 64),
+        severity: (string-ascii 20),
+        submission-block: uint,
+        approved: bool,
+        findings-summary: (string-ascii 500),
+    }
+)
+
+(define-read-only (get-auditor (auditor principal))
+    (map-get? Auditors auditor)
+)
+
+(define-read-only (get-audit-report (report-id uint))
+    (map-get? AuditReports report-id)
+)
+
+(define-read-only (get-auditor-count)
+    (var-get auditor-count)
+)
+
+(define-read-only (get-audit-report-count)
+    (var-get audit-report-count)
+)
+
+(define-public (register-auditor
+        (auditor-principal principal)
+        (auditor-name (string-ascii 100))
+    )
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (asserts! (is-none (map-get? Auditors auditor-principal))
+            err-auditor-exists
+        )
+        (map-set Auditors auditor-principal {
+            auditor-name: auditor-name,
+            registration-block: stacks-block-height,
+            active: true,
+            completed-audits: u0,
+        })
+        (var-set auditor-count (+ (var-get auditor-count) u1))
+        (ok true)
+    )
+)
+
+(define-public (submit-audit-report
+        (target-type (string-ascii 20))
+        (target-id uint)
+        (report-hash (string-ascii 64))
+        (severity (string-ascii 20))
+        (findings-summary (string-ascii 500))
+    )
+    (let (
+            (auditor (unwrap! (map-get? Auditors tx-sender) err-auditor-not-found))
+            (report-id (var-get audit-report-count))
+        )
+        (asserts! (get active auditor) err-auditor-inactive)
+        (asserts!
+            (or
+                (is-eq target-type "proposal")
+                (is-eq target-type "campaign")
+            )
+            err-invalid-target
+        )
+        (asserts!
+            (or
+                (is-eq severity "critical")
+                (is-eq severity "high")
+                (is-eq severity "medium")
+                (is-eq severity "low")
+                (is-eq severity "informational")
+            )
+            err-invalid-severity
+        )
+        (map-set AuditReports report-id {
+            auditor: tx-sender,
+            target-type: target-type,
+            target-id: target-id,
+            report-hash: report-hash,
+            severity: severity,
+            submission-block: stacks-block-height,
+            approved: false,
+            findings-summary: findings-summary,
+        })
+        (map-set Auditors tx-sender
+            (merge auditor { completed-audits: (+ (get completed-audits auditor) u1) })
+        )
+        (var-set audit-report-count (+ report-id u1))
+        (ok report-id)
+    )
+)
+
+(define-public (approve-audit-report (report-id uint))
+    (let ((report (unwrap! (map-get? AuditReports report-id) err-report-not-found)))
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (map-set AuditReports report-id (merge report { approved: true }))
+        (ok true)
+    )
+)
+
+(define-public (deactivate-auditor (auditor-principal principal))
+    (let ((auditor (unwrap! (map-get? Auditors auditor-principal) err-auditor-not-found)))
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (map-set Auditors auditor-principal (merge auditor { active: false }))
         (ok true)
     )
 )
